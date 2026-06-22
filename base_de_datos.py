@@ -84,28 +84,6 @@ def pacientes_pendientes_de_ayer() -> list:
             return cur.fetchall()
 
 
-def pacientes_pendientes_todos() -> list:
-    """
-    SOLO PARA PRUEBAS. A diferencia de pacientes_pendientes_de_ayer(),
-    esta función ignora la fecha de carga y devuelve TODOS los pacientes
-    que todavía no recibieron el mensaje, sin importar cuándo se cargaron.
-    No se usa en el envío automático de producción (enviar_encuestas.py),
-    solo la usa probar_envio_test.py para poder probar el envío el mismo
-    día en que se carga el paciente.
-    """
-    with _conexion() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT id, nombre, apellido, telefono
-                FROM pacientes
-                WHERE mensaje_enviado = FALSE
-                ORDER BY id DESC;
-                """
-            )
-            return cur.fetchall()
-
-
 def marcar_enviado(paciente_id: int):
     with _conexion() as conn:
         with conn.cursor() as cur:

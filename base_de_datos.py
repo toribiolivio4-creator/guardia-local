@@ -38,6 +38,7 @@ def init_db():
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS pacientes (
                     id              SERIAL PRIMARY KEY,
+                    dni             TEXT UNIQUE,
                     nombre          TEXT NOT NULL,
                     apellido        TEXT NOT NULL,
                     telefono        TEXT NOT NULL,
@@ -50,22 +51,81 @@ def init_db():
                 CREATE INDEX IF NOT EXISTS idx_pacientes_pendientes
                 ON pacientes (mensaje_enviado, fecha_carga);
             """)
+            cur.execute("""
+                ALTER TABLE pacientes ADD COLUMN IF NOT EXISTS dni TEXT UNIQUE;
+            """)
         conn.commit()
 
 
-def agregar_paciente(nombre: str, apellido: str, telefono: str) -> int:
+def agregar_paciente(nombre: str, apellido: str, telefono: str, dni: str = "") -> int:
     with _conexion() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                INSERT INTO pacientes (nombre, apellido, telefono)
-                VALUES (%s, %s, %s) RETURNING id;
+                INSERT INTO pacientes (nombre, apellido, telefono, dni)
+                VALUES (%s, %s, %s, NULLIF(%s, '')) RETURNING id;
                 """,
-                (nombre.strip(), apellido.strip(), telefono.strip())
+                (nombre.strip(), apellido.strip(), telefono.strip(), dni.strip())
             )
             row = cur.fetchone()
         conn.commit()
         return row["id"]
+
+
+def buscar_por_dni(dni: str) -> dict | None:
+    if not dni.strip():
+        return None
+    with _conexion() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT * FROM pacientes WHERE dni = %s;",
+                (dni.strip(),)
+            )
+            return cur.fetchone()
+
+
+def actualizar_telefono(paciente_id: int, telefono: str):
+    with _conexion() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE pacientes SET telefono = %s WHERE id = %s;",
+                (telefono.strip(), paciente_id)
+            )
+        conn.commit()
+
+
+def reactivar_paciente(paciente_id: int):
+    with _conexion() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE pacientes
+                SET mensaje_enviado = FALSE,
+                    fecha_carga = CURRENT_DATE
+                WHERE id = %s;
+                """,
+                (paciente_id,)
+            )
+        conn.commit()
+
+
+def actualizar_paciente(paciente_id: int, dni: str, nombre: str, apellido: str, telefono: str):
+    with _conexion() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE pacientes
+                SET dni = NULLIF(%s, ''),
+                    nombre = %s,
+                    apellido = %s,
+                    telefono = %s,
+                    mensaje_enviado = FALSE,
+                    fecha_carga = CURRENT_DATE
+                WHERE id = %s;
+                """,
+                (dni.strip(), nombre.strip(), apellido.strip(), telefono.strip(), paciente_id)
+            )
+        conn.commit()
 
 
 def pacientes_pendientes_de_ayer() -> list:

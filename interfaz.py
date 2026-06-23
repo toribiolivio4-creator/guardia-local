@@ -101,6 +101,7 @@ class App(tk.Tk):
         status_bar.pack(fill="x", side="bottom")
 
     def _build_form(self, parent):
+        self._form_frame = parent
         # Título sección
         tk.Label(
             parent,
@@ -123,14 +124,23 @@ class App(tk.Tk):
         # Campos
         self.var_nombre   = tk.StringVar()
         self.var_apellido = tk.StringVar()
+        self.var_dni      = tk.StringVar()
         self.var_telefono = tk.StringVar()
+        self._paciente_encontrado = None  # paciente encontrado por DNI
+        self._paciente_editando = None    # paciente cargado desde la tabla
+        self._evitar_busqueda = False     # evita búsqueda por DNI al cargar desde tabla
 
-        self._campo(parent, "Nombre *", self.var_nombre)
-        self._campo(parent, "Apellido *", self.var_apellido)
+        self._entry_nombre   = self._campo(parent, "Nombre *", self.var_nombre)
+        self._entry_apellido = self._campo(parent, "Apellido *", self.var_apellido)
+        self._campo(parent, "DNI *", self.var_dni, hint="Ej: 12345678")
         self._campo(parent, "Teléfono celular *", self.var_telefono, hint="Ej: 11 2345-6789")
 
-        # Botón guardar
-        self.btn_guardar = tk.Button(
+        # Rastrear cambios en DNI (búsqueda en vivo con debounce)
+        self._dni_trace_id = None
+        self.var_dni.trace_add("write", self._on_dni_change)
+
+        # Botón guardar / reactivar
+        self.btn_accion = tk.Button(
             parent,
             text="💾  Guardar paciente",
             font=FUENTE_BOTON,
@@ -143,7 +153,7 @@ class App(tk.Tk):
             pady=10,
             command=self._guardar,
         )
-        self.btn_guardar.pack(fill="x", pady=(8, 4))
+        self.btn_accion.pack(fill="x", pady=(8, 4))
 
         # Botón limpiar
         tk.Button(
@@ -238,6 +248,8 @@ class App(tk.Tk):
                 fg="#A0AEC0",
             ).pack(anchor="w")
 
+        return entry
+
     def _build_table(self, parent):
         # Header fila
         header_row = tk.Frame(parent, bg=GRIS_FONDO)
@@ -305,7 +317,7 @@ class App(tk.Tk):
             foreground=[("selected", BLANCO)],
         )
 
-        cols = ("id", "nombre", "apellido", "telefono", "fecha", "estado")
+        cols = ("id", "dni", "nombre", "apellido", "telefono", "fecha", "estado")
         self.tree = ttk.Treeview(
             parent,
             columns=cols,
@@ -314,12 +326,12 @@ class App(tk.Tk):
             selectmode="browse",
         )
 
-        anchos = {"id": 48, "nombre": 130, "apellido": 130, "telefono": 130, "fecha": 90, "estado": 100}
-        headers = {"id": "ID", "nombre": "Nombre", "apellido": "Apellido",
+        anchos = {"id": 44, "dni": 80, "nombre": 110, "apellido": 110, "telefono": 120, "fecha": 80, "estado": 90}
+        headers = {"id": "ID", "dni": "DNI", "nombre": "Nombre", "apellido": "Apellido",
                    "telefono": "Teléfono", "fecha": "Fecha carga", "estado": "Estado"}
         for col in cols:
             self.tree.heading(col, text=headers[col])
-            self.tree.column(col, width=anchos[col], anchor="center" if col in ("id","fecha","estado") else "w")
+            self.tree.column(col, width=anchos[col], anchor="center" if col in ("id","dni","fecha","estado") else "w")
 
         # Scrollbar
         sb = ttk.Scrollbar(parent, orient="vertical", command=self.tree.yview)
@@ -327,6 +339,8 @@ class App(tk.Tk):
 
         self.tree.pack(side="left", fill="both", expand=True)
         sb.pack(side="right", fill="y")
+
+        self.tree.bind("<<TreeviewSelect>>", self._on_fila_seleccionada)
 
         # Etiqueta de conteo
         self.lbl_conteo = tk.Label(
@@ -341,6 +355,7 @@ class App(tk.Tk):
     def _guardar(self):
         nombre   = self.var_nombre.get().strip()
         apellido = self.var_apellido.get().strip()
+        dni      = self.var_dni.get().strip()
         telefono = self.var_telefono.get().strip()
 
         if not nombre:
@@ -349,17 +364,20 @@ class App(tk.Tk):
         if not apellido:
             self._status("⚠  El apellido es obligatorio.", error=True)
             return
+        if not dni:
+            self._status("⚠  El DNI es obligatorio.", error=True)
+            return
         if not telefono or len("".join(c for c in telefono if c.isdigit())) < 8:
             self._status("⚠  El teléfono debe tener al menos 8 dígitos.", error=True)
             return
 
-        self.btn_guardar.config(state="disabled", text="Guardando…")
+        self.btn_accion.config(state="disabled", text="Guardando…")
         self.update()
 
         def _tarea():
             try:
                 from base_de_datos import agregar_paciente
-                nuevo_id = agregar_paciente(nombre, apellido, telefono)
+                nuevo_id = agregar_paciente(nombre, apellido, telefono, dni)
                 self.after(0, lambda: self._guardar_ok(nuevo_id, nombre, apellido))
             except Exception as e:
                 self.after(0, lambda: self._guardar_err(str(e)))
@@ -367,20 +385,114 @@ class App(tk.Tk):
         threading.Thread(target=_tarea, daemon=True).start()
 
     def _guardar_ok(self, nuevo_id, nombre, apellido):
-        self.btn_guardar.config(state="normal", text="💾  Guardar paciente")
+        self.btn_accion.config(state="normal", text="💾  Guardar paciente")
         self._status(f"✓  Paciente #{nuevo_id} {nombre} {apellido} guardado. WhatsApp se enviará mañana a las 9:00 hs.")
         self._limpiar()
         self._cargar_tabla()
 
     def _guardar_err(self, msg):
-        self.btn_guardar.config(state="normal", text="💾  Guardar paciente")
+        self.btn_accion.config(state="normal", text="💾  Guardar paciente")
         self._status(f"✗  Error: {msg}", error=True)
         messagebox.showerror("Error al guardar", msg)
+
+    def _reactivar(self):
+        paciente = self._paciente_encontrado
+        if not paciente:
+            return
+
+        telefono = self.var_telefono.get().strip()
+        if not telefono or len("".join(c for c in telefono if c.isdigit())) < 8:
+            self._status("⚠  El teléfono debe tener al menos 8 dígitos.", error=True)
+            return
+
+        self.btn_accion.config(state="disabled", text="Reactivando…")
+        self.update()
+
+        def _tarea():
+            try:
+                from base_de_datos import actualizar_telefono, reactivar_paciente
+                if telefono != paciente["telefono"]:
+                    actualizar_telefono(paciente["id"], telefono)
+                reactivar_paciente(paciente["id"])
+                self.after(0, lambda: self._reactivar_ok(paciente["nombre"], paciente["apellido"]))
+            except Exception as e:
+                self.after(0, lambda: self._guardar_err(str(e)))
+
+        threading.Thread(target=_tarea, daemon=True).start()
+
+    def _reactivar_ok(self, nombre, apellido):
+        self.btn_accion.config(state="normal", text="↻  Reactivar paciente (enviar mañana)")
+        self._status(f"✓  {nombre} {apellido} reactivado. Recibirá WhatsApp mañana a las 9:00 hs.")
+        self._limpiar()
+        self._cargar_tabla()
+
+    def _on_dni_change(self, *args):
+        if self._evitar_busqueda:
+            return
+        if self._dni_trace_id:
+            self.after_cancel(self._dni_trace_id)
+        self._dni_trace_id = self.after(400, self._buscar_por_dni)
+
+    def _buscar_por_dni(self):
+        dni = self.var_dni.get().strip()
+        if len(dni) < 6:
+            self._restaurar_formulario()
+            return
+
+        def _tarea():
+            try:
+                from base_de_datos import buscar_por_dni
+                paciente = buscar_por_dni(dni)
+                self.after(0, lambda: self._mostrar_resultado(paciente))
+            except Exception as e:
+                self.after(0, lambda: self._status(f"✗  Error al buscar DNI: {e}", error=True))
+
+        threading.Thread(target=_tarea, daemon=True).start()
+
+    def _mostrar_resultado(self, paciente):
+        if paciente:
+            self._paciente_encontrado = paciente
+            self.var_nombre.set(paciente["nombre"])
+            self.var_apellido.set(paciente["apellido"])
+            self.var_telefono.set(paciente["telefono"])
+            self._set_campos_habilitados(False)
+            self.btn_accion.config(
+                state="normal",
+                text="↻  Reactivar paciente (enviar mañana)",
+                bg=VERDE,
+                activebackground="#2F855A",
+                command=self._reactivar,
+            )
+            self._status(f"✓  Paciente {paciente['nombre']} {paciente['apellido']} encontrado. Reactivalo para enviar mañana.")
+        else:
+            self._restaurar_formulario()
+
+    def _restaurar_formulario(self):
+        self._paciente_encontrado = None
+        self._paciente_editando = None
+        if not self.var_nombre.get() and not self.var_apellido.get():
+            self._set_campos_habilitados(True)
+        self.btn_accion.config(
+            state="normal",
+            text="💾  Guardar paciente",
+            bg=AZUL_MEDIO,
+            activebackground=AZUL_OSCURO,
+            command=self._guardar,
+        )
+
+    def _set_campos_habilitados(self, habilitado):
+        estado = "normal" if habilitado else "disabled"
+        bg = BLANCO if habilitado else GRIS_FONDO
+        for entry in (getattr(self, "_entry_nombre", None), getattr(self, "_entry_apellido", None)):
+            if entry:
+                entry.config(state=estado, bg=bg)
 
     def _limpiar(self):
         self.var_nombre.set("")
         self.var_apellido.set("")
+        self.var_dni.set("")
         self.var_telefono.set("")
+        self._restaurar_formulario()
         self._status("Campos limpiados.")
 
     def _cargar_tabla(self):
@@ -413,7 +525,7 @@ class App(tk.Tk):
 
         for p in datos:
             nombre_completo = f"{p['nombre']} {p['apellido']}".lower()
-            if filtro and filtro not in nombre_completo and filtro not in p["telefono"].lower():
+            if filtro and filtro not in nombre_completo and filtro not in p["telefono"].lower() and filtro not in str(p.get("dni", "")).lower():
                 continue
 
             fecha = p["fecha_carga"]
@@ -433,6 +545,7 @@ class App(tk.Tk):
 
             self.tree.insert("", "end", values=(
                 p["id"],
+                p.get("dni", ""),
                 p["nombre"],
                 p["apellido"],
                 p["telefono"],
@@ -442,6 +555,87 @@ class App(tk.Tk):
 
         self.tree.tag_configure("enviado",   foreground=VERDE)
         self.tree.tag_configure("pendiente", foreground=AMARILLO)
+
+    # ── Edición desde tabla ────────────────────────────────────────────────
+    def _on_fila_seleccionada(self, event):
+        sel = self.tree.selection()
+        if not sel:
+            return
+        item = self.tree.item(sel[0])
+        paciente_id = item["values"][0]
+
+        def _tarea():
+            try:
+                from base_de_datos import listar_todos
+                data = listar_todos()
+                paciente = next((p for p in data if p["id"] == paciente_id), None)
+                if paciente:
+                    self.after(0, lambda: self._cargar_paciente_a_formulario(paciente))
+            except Exception as e:
+                self.after(0, lambda: self._status(f"✗  Error: {e}", error=True))
+
+        threading.Thread(target=_tarea, daemon=True).start()
+
+    def _cargar_paciente_a_formulario(self, paciente):
+        self._paciente_encontrado = None
+        self._paciente_editando = paciente
+        self._evitar_busqueda = True
+        self.var_nombre.set(paciente["nombre"])
+        self.var_apellido.set(paciente["apellido"])
+        self.var_dni.set(paciente.get("dni", "") or "")
+        self.var_telefono.set(paciente["telefono"])
+        self._evitar_busqueda = False
+        self._set_campos_habilitados(True)
+        self.btn_accion.config(
+            state="normal",
+            text="✎  Actualizar paciente",
+            bg=AZUL_MEDIO,
+            activebackground=AZUL_OSCURO,
+            command=self._actualizar,
+        )
+        self._status(f"Editando paciente #{paciente['id']} — {paciente['nombre']} {paciente['apellido']}")
+
+    def _actualizar(self):
+        paciente = self._paciente_editando
+        if not paciente:
+            return
+
+        nombre = self.var_nombre.get().strip()
+        apellido = self.var_apellido.get().strip()
+        dni = self.var_dni.get().strip()
+        telefono = self.var_telefono.get().strip()
+
+        if not nombre:
+            self._status("⚠  El nombre es obligatorio.", error=True)
+            return
+        if not apellido:
+            self._status("⚠  El apellido es obligatorio.", error=True)
+            return
+        if not dni:
+            self._status("⚠  El DNI es obligatorio.", error=True)
+            return
+        if not telefono or len("".join(c for c in telefono if c.isdigit())) < 8:
+            self._status("⚠  El teléfono debe tener al menos 8 dígitos.", error=True)
+            return
+
+        self.btn_accion.config(state="disabled", text="Actualizando…")
+        self.update()
+
+        def _tarea():
+            try:
+                from base_de_datos import actualizar_paciente
+                actualizar_paciente(paciente["id"], dni, nombre, apellido, telefono)
+                self.after(0, lambda: self._actualizar_ok(nombre, apellido))
+            except Exception as e:
+                self.after(0, lambda: self._guardar_err(str(e)))
+
+        threading.Thread(target=_tarea, daemon=True).start()
+
+    def _actualizar_ok(self, nombre, apellido):
+        self.btn_accion.config(state="normal")
+        self._status(f"✓  {nombre} {apellido} actualizado. WhatsApp se enviará mañana a las 9:00 hs.")
+        self._limpiar()
+        self._cargar_tabla()
 
     # ── Cron ───────────────────────────────────────────────────────────────
     _cron_activo = False

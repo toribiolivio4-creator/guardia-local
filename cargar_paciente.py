@@ -66,8 +66,8 @@ def mostrar_tabla_pacientes():
     hoy = date.today().isoformat()
     ayer = (date.today() - timedelta(days=1)).isoformat()
 
-    print(f"\n  {NEGRITA}{'ID':<5} {'Nombre':<20} {'Teléfono':<18} {'Fecha':<12} {'Estado'}{RESET}")
-    print("  " + "─" * 72)
+    print(f"\n  {NEGRITA}{'ID':<5} {'DNI':<12} {'Nombre':<20} {'Teléfono':<18} {'Fecha':<12} {'Estado'}{RESET}")
+    print("  " + "─" * 85)
 
     for p in pacientes[:20]:
         estado = f"{VERDE}✓ Enviado{RESET}" if p["mensaje_enviado"] else f"{AMARILLO}⏳ Pendiente{RESET}"
@@ -80,16 +80,55 @@ def mostrar_tabla_pacientes():
             fecha_txt = fecha
 
         nombre_completo = f"{p['nombre']} {p['apellido']}"[:20]
-        print(f"  {p['id']:<5} {nombre_completo:<20} {p['telefono']:<18} {fecha_txt:<12} {estado}")
+        dni = p.get("dni", "") or ""
+        print(f"  {p['id']:<5} {dni:<12} {nombre_completo:<20} {p['telefono']:<18} {fecha_txt:<12} {estado}")
 
     if len(pacientes) > 20:
         print(f"  {AMARILLO}... y {len(pacientes) - 20} más.{RESET}")
     print()
 
 
-def cargar_nuevo_paciente():
+def buscar_y_mostrar_paciente():
+    dni = pedir_campo("DNI del paciente")
+    from base_de_datos import buscar_por_dni
+    paciente = buscar_por_dni(dni)
+    if paciente:
+        print(f"\n  {VERDE}✓ Paciente encontrado:{RESET}")
+        print(f"    {NEGRITA}{paciente['nombre']} {paciente['apellido']}{RESET}")
+        print(f"    Teléfono: {paciente['telefono']}")
+        if paciente["mensaje_enviado"]:
+            print(f"    Estado: {AMARILLO}Ya fue enviado{RESET}")
+        else:
+            print(f"    Estado: {VERDE}Pendiente de envío{RESET}")
+        print()
+        while True:
+            r = input("  ¿Querés reactivarlo para que reciba el WhatsApp mañana? (s/n): ").strip().lower()
+            if r in ("s", "si", "sí", "y", "yes"):
+                tel_raw = input(f"  Teléfono (actual: {paciente['telefono']}, Enter para mantener): ").strip()
+                if tel_raw:
+                    tel = validar_telefono(tel_raw)
+                    if tel:
+                        from base_de_datos import actualizar_telefono
+                        actualizar_telefono(paciente["id"], tel)
+                    else:
+                        print(f"  {ROJO}Teléfono inválido, se mantiene el actual.{RESET}")
+                from base_de_datos import reactivar_paciente
+                reactivar_paciente(paciente["id"])
+                print(f"\n  {VERDE}{NEGRITA}✓ {paciente['nombre']} {paciente['apellido']} reactivado. Recibirá WhatsApp mañana a las 9:00 hs.{RESET}\n")
+                return
+            elif r in ("n", "no"):
+                print(f"  {AMARILLO}No se realizaron cambios.{RESET}\n")
+                return
+    else:
+        print(f"  {AMARILLO}Paciente no encontrado. Cargá los datos como nuevo.{RESET}\n")
+        cargar_nuevo_paciente_con_dni(dni)
+
+
+def cargar_nuevo_paciente_con_dni(dni=""):
     print(f"\n  {NEGRITA}── Datos del paciente ─────────────────────{RESET}\n")
 
+    if not dni:
+        dni = pedir_campo("DNI")
     nombre = pedir_campo("Nombre")
     apellido = pedir_campo("Apellido")
 
@@ -101,6 +140,7 @@ def cargar_nuevo_paciente():
         print(f"  {ROJO}⚠  Teléfono inválido. Ingresá al menos 8 dígitos.{RESET}")
 
     print(f"\n  Confirmá los datos:")
+    print(f"    DNI:       {NEGRITA}{dni}{RESET}")
     print(f"    Nombre:    {NEGRITA}{nombre} {apellido}{RESET}")
     print(f"    Teléfono:  {NEGRITA}{tel}{RESET}")
     print(f"    Mensaje:   Se enviará mañana a las 9:00 hs\n")
@@ -108,7 +148,7 @@ def cargar_nuevo_paciente():
     while True:
         confirmar = input("  ¿Guardás? (s/n): ").strip().lower()
         if confirmar in ("s", "si", "sí", "y", "yes"):
-            nuevo_id = agregar_paciente(nombre, apellido, tel)
+            nuevo_id = agregar_paciente(nombre, apellido, tel, dni)
             print(f"\n  {VERDE}{NEGRITA}✓ Paciente guardado correctamente (ID #{nuevo_id}).{RESET}")
             print(f"  {VERDE}  Recibirá el WhatsApp mañana a las 9:00 hs.{RESET}\n")
             return
@@ -125,22 +165,25 @@ def menu():
 
     while True:
         print(f"  {NEGRITA}¿Qué querés hacer?{RESET}\n")
-        print("    [1] Cargar nuevo paciente")
-        print("    [2] Ver pacientes cargados")
-        print("    [3] Salir\n")
+        print("    [1] Buscar paciente por DNI (reactivar si ya existe)")
+        print("    [2] Cargar paciente nuevo")
+        print("    [3] Ver pacientes cargados")
+        print("    [4] Salir\n")
 
         opcion = input("  Opción: ").strip()
 
         if opcion == "1":
-            cargar_nuevo_paciente()
+            buscar_y_mostrar_paciente()
         elif opcion == "2":
+            cargar_nuevo_paciente_con_dni()
+        elif opcion == "3":
             print()
             mostrar_tabla_pacientes()
-        elif opcion == "3":
+        elif opcion == "4":
             print(f"\n  {AZUL}Hasta luego.{RESET}\n")
             sys.exit(0)
         else:
-            print(f"  {ROJO}Opción no válida. Escribí 1, 2 o 3.{RESET}\n")
+            print(f"  {ROJO}Opción no válida. Escribí 1, 2, 3 o 4.{RESET}\n")
 
 
 if __name__ == "__main__":

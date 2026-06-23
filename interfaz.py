@@ -71,11 +71,24 @@ class App(tk.Tk):
         main = tk.Frame(self, bg=GRIS_FONDO)
         main.pack(fill="both", expand=True, padx=20, pady=16)
 
-        # Columna izquierda: formulario
-        left = tk.Frame(main, bg=GRIS_FONDO, width=300)
+        # Columna izquierda: formulario (con scroll)
+        left = tk.Frame(main, bg=GRIS_FONDO)
         left.pack(side="left", fill="y", padx=(0, 16))
-        left.pack_propagate(False)
-        self._build_form(left)
+        left_canvas = tk.Canvas(left, bg=GRIS_FONDO, highlightthickness=0, width=290)
+        left_scroll = tk.Scrollbar(left, orient="vertical", command=left_canvas.yview)
+        left_canvas.configure(yscrollcommand=left_scroll.set)
+        left_canvas.pack(side="left", fill="both", expand=True)
+        left_scroll.pack(side="right", fill="y")
+        left_inner = tk.Frame(left_canvas, bg=GRIS_FONDO)
+        left_canvas.create_window((0, 0), window=left_inner, anchor="nw", width=280)
+        def _ajustar_scroll(event):
+            left_canvas.configure(scrollregion=left_canvas.bbox("all"))
+        left_inner.bind("<Configure>", _ajustar_scroll)
+        def _mouse_wheel(event):
+            left_canvas.yview_scroll(-1 * (event.delta // 120), "units")
+        left_canvas.bind("<Enter>", lambda e: left_canvas.bind_all("<MouseWheel>", _mouse_wheel))
+        left_canvas.bind("<Leave>", lambda e: left_canvas.unbind_all("<MouseWheel>"))
+        self._build_form(left_inner)
 
         # Separador vertical
         sep = tk.Frame(main, bg=GRIS_BORDE, width=1)
@@ -427,7 +440,7 @@ class App(tk.Tk):
         self._cargar_tabla()
 
     def _on_dni_change(self, *args):
-        if self._evitar_busqueda:
+        if self._evitar_busqueda or self._paciente_editando:
             return
         if self._dni_trace_id:
             self.after_cancel(self._dni_trace_id)
